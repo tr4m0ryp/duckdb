@@ -5,10 +5,11 @@ a research pipeline that records Solana memecoin trades. It holds two pieces of 
 
 1. **An engine change.** `sum()` and `avg()` over unsigned 64-bit integers (`UBIGINT`) run
    **5.9-6.8x faster** and stay exact. Lamport amounts are unsigned 64-bit, so this is the
-   arithmetic our trade queries do most.
+   arithmetic our trade queries do most. Over our whole 35M-trade capture, the lamport sums
+   run **1.47x faster end to end**, and the summing itself **9x faster**.
 2. **A storage change.** The trade tape moved from JSON lines to mint-sorted Parquet queried
-   through DuckDB. Pulling one day's trades for a set of mints went from **2.24 s to 28 ms**,
-   and the data shrank **5.6x**, with every row verified against its source.
+   through DuckDB. Pulling one day's trades for a set of mints went from **1.33 s to 18 ms**
+   (74x), and the data shrank **5.6x**, with every row verified against its source.
 
 The second change is the larger win. The first one is the engine fix we found along the way.
 
@@ -56,11 +57,20 @@ reached it.
 |---|---|---|---|
 | `sum(UBIGINT)`, statistics prove no wrap | 197 ms | 29 ms | **6.8x** |
 | `sum(UBIGINT)`, values near 2^64 (carry on most rows) | 195 ms | 33 ms | **5.9x** |
-| One real capture day, `sum(v_sol)` from Parquet | 126 ms | 94 ms | 1.34x |
-| One real capture day, `sum(v_sol)` grouped by mint | 167 ms | 137 ms | 1.22x |
 
-On real data the gain is smaller because decoding the Parquet column becomes the larger
-cost. Every result equals `sum(u::HUGEINT)` exactly.
+On our real data, the whole 11-day capture run (30.6M trades in Parquet, 8 threads, best of
+7, both builds interleaved and returning identical results):
+
+| Query | Before | After | Speed-up |
+|---|---|---|---|
+| `sum` and `avg` over the three lamport columns | 756 ms | 515 ms | **1.47x** |
+| Volume per mint (three sums, grouped by mint) | 368 ms | 320 ms | 1.15x |
+| Control: read the same columns, no arithmetic | 485 ms | 485 ms | 1.00x |
+
+The control fixes the cost of decoding the Parquet columns at 485 ms on both builds. What
+remains is the summing itself: 756 - 485 = 271 ms before, 515 - 485 = 30 ms after, **9x
+faster**. End to end the gain is smaller because decoding becomes the larger cost. Every
+result equals `sum(u::HUGEINT)` exactly.
 
 ### Tried and not shipped
 
@@ -97,18 +107,24 @@ set of mints.
 
 | Data | Before | After |
 |---|---|---|
-| Trade events, 11 days (30.6M rows) | 21.6 GB JSONL | **3.8 GB** Parquet (5.6x) |
+| Trade events, 18 day files (35.3M rows) | 24.8 GB JSONL | **4.4 GB** Parquet (5.6x) |
 | Operator observations, 815k rows of nested JSON | 4.2 GB JSONL | **125 MB** Parquet (34x) |
 | RPC response cache | 1,458,371 files | 256 Parquet files, original bytes inside |
 
-On one capture day:
+On one capture day (653k trades, best of 9, stock DuckDB v1.5.6 against this fork, same
+commit, interleaved):
 
-| Read | Time |
-|---|---|
-| Python byte scanner over JSONL, 500 mints | 2.24 s |
-| DuckDB over the same JSONL | 0.61 s (3.7x, the engine alone) |
-| DuckDB over mint-sorted Parquet | **28 ms** (22x more, the layout) |
-| One mint's whole tape | 6.5 ms |
+| Read | Stock DuckDB | This fork |
+|---|---|---|
+| Python byte scanner over JSONL, 500 mints | 1,331 ms (Python, no engine) | |
+| DuckDB over the same JSONL, 500 mints | 462 ms (2.9x, the engine alone) | 468 ms |
+| DuckDB over mint-sorted Parquet, 500 mints | **18 ms** (26x more, the layout) | 18 ms |
+| One mint's whole tape | 4 ms | 4 ms |
+| Whole-day lamport sums and average | 23 ms | **17 ms (1.35x, the new kernel)** |
+
+The engine change leaves the lookups alone: a 500-mint lookup sums only 34k matched rows, so
+the arithmetic is a sliver of its cost. It shows where whole days or whole captures are
+aggregated, as in the table under section 1.
 
 The layout is where most of the gain comes from:
 
