@@ -1,0 +1,75 @@
+# name: test/sql/aggregate/aggregates/test_sum_ubigint.test
+# description: SUM over UBIGINT uses a native unsigned accumulator and stays exact
+# group: [aggregates]
+
+statement ok
+PRAGMA enable_verification
+
+# empty input and all-NULL input return NULL
+query I
+SELECT sum(u) FROM (SELECT 1::UBIGINT AS u) WHERE u > 5
+----
+NULL
+
+query I
+SELECT sum(NULL::UBIGINT) FROM range(10)
+----
+NULL
+
+# the result type is unchanged (HUGEINT), as with the implicit cast it replaces
+query I
+SELECT typeof(sum(42::UBIGINT))
+----
+HUGEINT
+
+# carries into the upper word: 3 * (2^64 - 1)
+query I
+SELECT sum(u) FROM (VALUES (18446744073709551615::UBIGINT), (18446744073709551615::UBIGINT), (18446744073709551615::UBIGINT)) t(u)
+----
+55340232221128654845
+
+# constant vector path, small value: value * count stays in 64 bits
+query I
+SELECT sum(7::UBIGINT) FROM range(100000)
+----
+700000
+
+# constant vector path, large value: falls back to the hugeint multiply
+query I
+SELECT sum(18446744073709551615::UBIGINT) FROM range(5000)
+----
+92233720368547758075000
+
+# NULLs are skipped
+query I
+SELECT sum(CASE WHEN i % 2 = 0 THEN NULL ELSE 18446744073709551615::UBIGINT END) FROM range(10) t(i)
+----
+92233720368547758075
+
+# matches the HUGEINT reference across threads, groups and windows
+statement ok
+SET threads = 4
+
+statement ok
+CREATE TABLE t AS SELECT i % 97 AS g, (18446744073709551615 - (i * 2654435761) % 1000000)::UBIGINT AS u, (i * 7919)::UBIGINT AS s FROM range(300000) t(i)
+
+query I
+SELECT sum(u) = sum(u::HUGEINT) AND sum(s) = sum(s::HUGEINT) FROM t
+----
+true
+
+query I
+SELECT bool_and(a = b) FROM (SELECT sum(u) a, sum(u::HUGEINT) b FROM t GROUP BY g)
+----
+true
+
+query I
+SELECT bool_and(a = b) FROM (SELECT sum(u) OVER w a, sum(u::HUGEINT) OVER w b FROM t WINDOW w AS (PARTITION BY g ORDER BY s ROWS BETWEEN 50 PRECEDING AND CURRENT ROW))
+----
+true
+
+# a statistics-proven bound selects the plain 64-bit accumulator
+query I
+SELECT sum(s) = sum(s::HUGEINT) FROM t WHERE s < 1000000
+----
+true

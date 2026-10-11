@@ -47,6 +47,17 @@ struct SumToHugeintOperation : public BaseSumOperation<SumSetOperation, AddToHug
 	}
 };
 
+struct UnsignedSumToHugeintOperation : public BaseSumOperation<SumSetOperation, UnsignedAddToHugeint> {
+	template <class T, class STATE>
+	static void Finalize(STATE &state, T &target, AggregateFinalizeData &finalize_data) {
+		if (!state.isset) {
+			finalize_data.ReturnNull();
+		} else {
+			target = state.value;
+		}
+	}
+};
+
 template <class ADD_OPERATOR>
 struct DoubleSumOperation : public BaseSumOperation<SumSetOperation, ADD_OPERATOR> {
 	template <class T, class STATE>
@@ -110,6 +121,16 @@ AggregateFunction GetSumAggregateNoOverflow(PhysicalType type) {
 		function.SetDeserializeCallback(SumNoOverflowDeserialize);
 		return function;
 	}
+	case PhysicalType::UINT64: {
+		auto function = AggregateFunction::UnaryAggregate<SumState<uint64_t>, uint64_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::UBIGINT, LogicalType::HUGEINT);
+		function.name = "sum_no_overflow";
+		function.SetOrderDependent(AggregateOrderDependent::NOT_ORDER_DEPENDENT);
+		function.SetBindCallback(SumNoOverflowBind);
+		function.SetSerializeCallback(SumNoOverflowSerialize);
+		function.SetDeserializeCallback(SumNoOverflowDeserialize);
+		return function;
+	}
 	default:
 		throw BinderException("Unsupported internal type for sum_no_overflow");
 	}
@@ -142,6 +163,16 @@ unique_ptr<BaseStatistics> SumPropagateStats(ClientContext &context, BoundAggreg
 			max_negative = NumericStats::Min(numeric_stats).GetValueUnsafe<int64_t>();
 			max_positive = NumericStats::Max(numeric_stats).GetValueUnsafe<int64_t>();
 			break;
+		case PhysicalType::UINT64: {
+			// unsigned: the bound is n * max against the uint64_t range, so the plain
+			// uint64_t accumulator is exact whenever the statistics prove it cannot wrap
+			auto max_value = Hugeint::Convert(NumericStats::Max(numeric_stats).GetValueUnsafe<uint64_t>());
+			auto max_sum = max_value * Hugeint::Convert(input.node_stats->max_cardinality);
+			if (max_sum < Hugeint::Convert(NumericLimits<uint64_t>::Maximum())) {
+				expr.function = GetSumAggregateNoOverflow(internal_type);
+			}
+			return nullptr;
+		}
 		default:
 			throw InternalException("Unsupported type for propagate sum stats");
 		}
@@ -185,6 +216,14 @@ AggregateFunction GetSumAggregate(PhysicalType type) {
 		auto function =
 		    AggregateFunction::UnaryAggregate<SumState<hugeint_t>, int64_t, hugeint_t, SumToHugeintOperation>(
 		        LogicalType::BIGINT, LogicalType::HUGEINT);
+		function.SetStatisticsCallback(SumPropagateStats);
+		function.SetOrderDependent(AggregateOrderDependent::NOT_ORDER_DEPENDENT);
+		return function;
+	}
+	case PhysicalType::UINT64: {
+		auto function =
+		    AggregateFunction::UnaryAggregate<SumState<hugeint_t>, uint64_t, hugeint_t, UnsignedSumToHugeintOperation>(
+		        LogicalType::UBIGINT, LogicalType::HUGEINT);
 		function.SetStatisticsCallback(SumPropagateStats);
 		function.SetOrderDependent(AggregateOrderDependent::NOT_ORDER_DEPENDENT);
 		return function;
@@ -279,6 +318,7 @@ AggregateFunctionSet SumFun::GetFunctions() {
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT16));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT32));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT64));
+	sum.AddFunction(GetSumAggregate(PhysicalType::UINT64));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT128));
 	sum.AddFunction(AggregateFunction::UnaryAggregate<SumState<double>, double, double, NumericSumOperation>(
 	    LogicalType::DOUBLE, LogicalType::DOUBLE));
@@ -295,6 +335,7 @@ AggregateFunctionSet SumNoOverflowFun::GetFunctions() {
 	AggregateFunctionSet sum_no_overflow;
 	sum_no_overflow.AddFunction(GetSumAggregateNoOverflow(PhysicalType::INT32));
 	sum_no_overflow.AddFunction(GetSumAggregateNoOverflow(PhysicalType::INT64));
+	sum_no_overflow.AddFunction(GetSumAggregateNoOverflow(PhysicalType::UINT64));
 	sum_no_overflow.AddFunction(GetSumAggregateNoOverflowDecimal());
 	return sum_no_overflow;
 }
