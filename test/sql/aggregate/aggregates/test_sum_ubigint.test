@@ -73,3 +73,19 @@ query I
 SELECT sum(s) = sum(s::HUGEINT) FROM t WHERE s < 1000000
 ----
 true
+
+# avg over UBIGINT shares the unsigned accumulator; exact against the HUGEINT reference
+query I
+SELECT typeof(avg(42::UBIGINT))
+----
+DOUBLE
+
+query I
+SELECT avg(u) FROM (VALUES (18446744073709551615::UBIGINT), (18446744073709551615::UBIGINT)) t(u)
+----
+1.8446744073709552e+19
+
+query I
+SELECT bool_and(a = b) FROM (SELECT avg(u) a, avg(u::HUGEINT) b FROM t GROUP BY g)
+----
+true

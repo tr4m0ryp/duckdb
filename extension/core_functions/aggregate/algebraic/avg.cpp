@@ -111,7 +111,8 @@ struct IntegerAverageOperation : public BaseSumOperation<AverageSetOperation, Re
 	}
 };
 
-struct IntegerAverageOperationHugeint : public BaseSumOperation<AverageSetOperation, AddToHugeint> {
+template <class ADD_OPERATOR>
+struct HugeintAccumulatorAverageOperation : public BaseSumOperation<AverageSetOperation, ADD_OPERATOR> {
 	template <class T, class STATE>
 	static void Finalize(STATE &state, T &target, AggregateFinalizeData &finalize_data) {
 		if (state.count == 0) {
@@ -122,6 +123,10 @@ struct IntegerAverageOperationHugeint : public BaseSumOperation<AverageSetOperat
 		}
 	}
 };
+
+using IntegerAverageOperationHugeint = HugeintAccumulatorAverageOperation<AddToHugeint>;
+//! UBIGINT input: unsigned carry into the hugeint, no sign branch (see UnsignedAddToHugeint)
+using UnsignedAverageOperationHugeint = HugeintAccumulatorAverageOperation<UnsignedAddToHugeint>;
 
 struct DiscreteAverageOperation : public BaseSumOperation<AverageSetOperation, AddToHugeint> {
 	template <class T, class STATE>
@@ -253,6 +258,10 @@ AggregateFunction GetAverageAggregate(PhysicalType type) {
 		return AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, int64_t, double, IntegerAverageOperationHugeint>(
 		    LogicalType::BIGINT, LogicalType::DOUBLE);
 	}
+	case PhysicalType::UINT64: {
+		return AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, uint64_t, double, UnsignedAverageOperationHugeint>(
+		    LogicalType::UBIGINT, LogicalType::DOUBLE);
+	}
 	case PhysicalType::INT128: {
 		return AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, hugeint_t, double, HugeintAverageOperation>(
 		    LogicalType::HUGEINT, LogicalType::DOUBLE);
@@ -288,6 +297,7 @@ AggregateFunctionSet AvgFun::GetFunctions() {
 	avg.AddFunction(GetAverageAggregate(PhysicalType::INT16));
 	avg.AddFunction(GetAverageAggregate(PhysicalType::INT32));
 	avg.AddFunction(GetAverageAggregate(PhysicalType::INT64));
+	avg.AddFunction(GetAverageAggregate(PhysicalType::UINT64));
 	avg.AddFunction(GetAverageAggregate(PhysicalType::INT128));
 	avg.AddFunction(GetAverageAggregate(PhysicalType::INTERVAL));
 	avg.AddFunction(AggregateFunction::UnaryAggregate<AvgState<double>, double, double, NumericAverageOperation>(
