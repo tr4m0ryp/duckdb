@@ -5,7 +5,7 @@ a research pipeline that records Solana memecoin trades. It holds two pieces of 
 
 1. **An engine change.** `sum()` and `avg()` over unsigned 64-bit integers (`UBIGINT`) run
    **5.9-6.8x faster** and stay exact. Lamport amounts are unsigned 64-bit, so this is the
-   arithmetic our trade queries do most. Over our whole 35M-trade capture, the lamport sums
+   arithmetic our trade queries do most. Over an 11-day capture of 30.6M trades, the lamport sums
    run **1.47x faster end to end**, and the summing itself **9x faster**.
 2. **A storage change.** The trade tape moved from JSON lines to mint-sorted Parquet queried
    through DuckDB. Pulling one day's trades for a set of mints went from **1.33 s to 18 ms**
