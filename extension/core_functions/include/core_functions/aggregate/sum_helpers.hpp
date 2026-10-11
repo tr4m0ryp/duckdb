@@ -159,6 +159,32 @@ struct AddToHugeint {
 	}
 };
 
+struct UnsignedAddToHugeint {
+	// unsigned specialisation of AddToHugeint: a uint64_t can only carry into the
+	// upper word, never borrow, so the sign test and its branch disappear and the
+	// carry is the comparison result itself. The sum of n values is below n * 2^64,
+	// which cannot leave the hugeint range for any n < 2^63, so no overflow check.
+	static void AddValue(hugeint_t &result, uint64_t value) {
+		result.lower += value;
+		result.upper += static_cast<int64_t>(result.lower < value);
+	}
+
+	template <class STATE, class T>
+	static void AddNumber(STATE &state, T input) {
+		AddValue(state.value, uint64_t(input));
+	}
+
+	template <class STATE, class T>
+	static void AddConstant(STATE &state, T input, idx_t count) {
+		// fast path as in AddToHugeint: value * count stays in a uint64_t
+		if (uint64_t(input) < NumericLimits<uint64_t>::Maximum() / STANDARD_VECTOR_SIZE) {
+			AddValue(state.value, uint64_t(input) * count);
+		} else {
+			state.value += Hugeint::Convert(uint64_t(input)) * Hugeint::Convert(count);
+		}
+	}
+};
+
 template <class STATEOP, class ADDOP>
 struct BaseSumOperation {
 	template <class STATE>
